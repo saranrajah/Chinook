@@ -1,4 +1,8 @@
-﻿<div class="top-row ps-3 navbar navbar-dark">
+﻿@using System.Security.Claims
+@using Chinook.Models
+@inject IPlaylistService PlaylistService
+
+<div class="top-row ps-3 navbar navbar-dark">
     <div class="container-fluid">
         <a class="navbar-brand" href="">Chinook</a>
         <button title="Navigation menu" class="navbar-toggler" @onclick="ToggleNavMenu">
@@ -14,18 +18,27 @@
                 <span class="oi oi-home" aria-hidden="true"></span>Home
             </NavLink>
         </div>
-        <div class="nav-item px-3">
-@* 
-            <NavLink class="nav-link" href="playlist/playlistnumber">
-                <i class="bi bi-music-note-list me-3" style="font-size: 1.25em"></i>My favorite tracks
-            </NavLink>
-*@
-</div>
+        @if (UserPlaylists != null)
+        {
+            foreach (var item in UserPlaylists)
+            {
+                <div class="nav-item px-3">
+                    <NavLink class="nav-link" href="@($"playlist/{item.PlaylistId}")">
+                        <i class="bi bi-music-note-list me-3" style="font-size: 1.25em"></i>@item.Playlist.Name
+                    </NavLink>
+                </div>
+            }
+        }
 
     </nav>
 </div>
 
 @code {
+    [CascadingParameter] private Task<AuthenticationState> authenticationState { get; set; }
+
+    private string CurrentUserId;
+    private List<UserPlaylist> UserPlaylists;
+
     private bool collapseNavMenu = true;
 
     private string? NavMenuCssClass => collapseNavMenu ? "collapse" : null;
@@ -33,5 +46,18 @@
     private void ToggleNavMenu()
     {
         collapseNavMenu = !collapseNavMenu;
+    }
+
+    protected override async Task OnInitializedAsync()
+    {
+        CurrentUserId = await GetUserId();
+        UserPlaylists = await PlaylistService.GetUserPlaylists(CurrentUserId);
+    }
+
+    private async Task<string> GetUserId()
+    {
+        var user = (await authenticationState).User;
+        var userId = user.FindFirst(u => u.Type.Contains(ClaimTypes.NameIdentifier))?.Value;
+        return userId;
     }
 }

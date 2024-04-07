@@ -3,8 +3,9 @@
 
 @using Chinook.Models
 @using Chinook.ClientModels
-@using Microsoft.EntityFrameworkCore
 @using System.Security.Claims;
+@inject IArtistService ArtistService
+@inject IPlaylistService PlaylistService
 
 @if (!string.IsNullOrWhiteSpace(InfoMessage))
 {
@@ -25,15 +26,15 @@
 else
 {
     <h1>@Artist.Name</h1>
-        <table class="table table-striped table-hover table-sm">
-            <thead>
-                <tr>
-                    <th>Album title</th>
-                    <th>Track name</th>
-                    <th></th>
+    <table class="table table-striped table-hover table-sm">
+        <thead>
+            <tr>
+                <th>Album title</th>
+                <th>Track name</th>
+                <th></th>
             </tr>
-            </thead>
-            <tbody>
+        </thead>
+        <tbody>
             @foreach (var track in Tracks)
             {
                 <tr>
@@ -42,7 +43,7 @@ else
                     <td>
                         @if (track.IsFavorite)
                         {
-                            <a href="#" class="m-1" title="Unmark as favorite" @onclick="@(() => UnfavoriteTrack(track.TrackId))" @onclick:preventDefault><i class="bi bi-star-filled"></i></a>
+                            <a href="#" class="m-1" title="Unmark as favorite" @onclick="@(() => UnfavoriteTrack(track.TrackId))" @onclick:preventDefault><i class="bi bi-star-fill"></i></a>
                         }
                         else
                         {
@@ -52,13 +53,25 @@ else
                     </td>
                 </tr>
             }
-            </tbody>
-        </table>
+        </tbody>
+    </table>
 }
 
 <Modal @ref="PlaylistDialog">
     <Title>Add to playlist</Title>
     <Body>
+        @if (!string.IsNullOrWhiteSpace(ErrorMessage))
+        {
+            <div class="alert alert-danger fade show">
+                <div class="d-flex align-items-start">
+                    <div class="flex-grow-1">
+                        @ErrorMessage
+                    </div>
+                    <button type="button" class="btn-close" aria-label="Close" @onclick="CloseErrorMessage"></button>
+                </div>
+            </div>
+        }
+
         @if (SelectedTrack != null)
         {
             <div class="form-group mb-2">
@@ -68,15 +81,20 @@ else
 
         <div class="mb-2">
             <label for="ExistingPlaylist">Add to existing playlist</label>
-            <select class="form-control" id="ExistingPlaylist">
-                <option>Playlist 1</option>
-                <option>Playlist 2</option>
-                <option>Playlist 3</option>
+            <select class="form-control" id="ExistingPlaylist" @bind="SelectedPlaylistId">
+                @if (UserPlaylists != null)
+                {
+                    foreach (var item in UserPlaylists.Where(w => w.Playlist?.Name != "My favorite tracks"))
+                    {
+                        <option value="@item.PlaylistId">@item.Playlist?.Name</option>
+                    }
+
+                }
             </select>
         </div>
         <div class="mb-2">
             <label for="NewPlaylist">Create new playlist</label>
-            <input type="text" id="NewPlaylist" class="form-control" placeholder="Name for the new playlist">
+            <input type="text" id="NewPlaylist" class="form-control" placeholder="Name for the new playlist" @bind=PlaylistName @bind:event="oninput">
         </div>
     </Body>
     <Footer>
@@ -87,34 +105,28 @@ else
 @code {
     [Parameter] public long ArtistId { get; set; }
     [CascadingParameter] private Task<AuthenticationState> authenticationState { get; set; }
-    [Inject] IDbContextFactory<ChinookContext> DbFactory { get; set; }
     private Modal PlaylistDialog { get; set; }
 
     private Artist Artist;
     private List<PlaylistTrack> Tracks;
-    private DbContext DbContext;
     private PlaylistTrack SelectedTrack;
     private string InfoMessage;
+    private string ErrorMessage;
     private string CurrentUserId;
+    private List<UserPlaylist> UserPlaylists;
+    private string PlaylistName = "";
+    private long SelectedPlaylistId;
 
     protected override async Task OnInitializedAsync()
     {
         await InvokeAsync(StateHasChanged);
         CurrentUserId = await GetUserId();
-        var DbContext = await DbFactory.CreateDbContextAsync();
 
-        Artist = DbContext.Artists.SingleOrDefault(a => a.ArtistId == ArtistId);
+        Artist = await ArtistService.GetArtistById(ArtistId);
 
-        Tracks = DbContext.Tracks.Where(a => a.Album.ArtistId == ArtistId)
-            .Include(a => a.Album)
-            .Select(t => new PlaylistTrack()
-                {
-                    AlbumTitle = (t.Album == null ? "-" : t.Album.Title),
-                    TrackId = t.TrackId,
-                    TrackName = t.Name,
-                    IsFavorite = t.Playlists.Where(p => p.UserPlaylists.Any(up => up.UserId == CurrentUserId && up.Playlist.Name == "Favorites")).Any()
-                })
-            .ToList();
+        Tracks = await PlaylistService.GetTracksByArtist(ArtistId, CurrentUserId);
+
+        UserPlaylists = await PlaylistService.GetUserPlaylists(CurrentUserId);
     }
 
     private async Task<string> GetUserId()
@@ -124,41 +136,72 @@ else
         return userId;
     }
 
-    private void FavoriteTrack(long trackId)
+    private async void FavoriteTrack(long trackId)
     {
         var track = Tracks.FirstOrDefault(t => t.TrackId == trackId);
+        track.IsFavorite = true;
 
-        // TODO: add track to Favorites playlist
+        await PlaylistService.AddTrackToPlaylist(null, trackId, CurrentUserId, true);
 
-        InfoMessage = $"Track {track.ArtistName} - {track.AlbumTitle} - {track.TrackName} added to playlist Favorites.";
+        InfoMessage = $"Track {track.ArtistName} - {track.AlbumTitle} - {track.TrackName} added to playlist My favorite tracks.";
     }
 
     private void UnfavoriteTrack(long trackId)
     {
         var track = Tracks.FirstOrDefault(t => t.TrackId == trackId);
+        track.IsFavorite = false;
 
-        // TODO: remove track from Favorites playlist
+        PlaylistService.RemoveTrackFromPlaylist(0, trackId, true);
 
-        InfoMessage = $"Track {track.ArtistName} - {track.AlbumTitle} - {track.TrackName} removed from playlist Favorites.";
+        InfoMessage = $"Track {track.ArtistName} - {track.AlbumTitle} - {track.TrackName} removed from playlist My favorite tracks.";
     }
 
-    private void OpenPlaylistDialog(long trackId)
+    private async void OpenPlaylistDialog(long trackId)
     {
         CloseInfoMessage();
+        PlaylistName = "";
+        UserPlaylists = await PlaylistService.GetUserPlaylists(CurrentUserId);
         SelectedTrack = Tracks.FirstOrDefault(t => t.TrackId == trackId);
         PlaylistDialog.Open();
     }
 
-    private void AddTrackToPlaylist()
+    private async void AddTrackToPlaylist()
     {
-        // TODO
+        try
+        {
+            Models.Playlist createdPlaylist;
 
-        CloseInfoMessage();
-        InfoMessage = $"Track {Artist.Name} - {SelectedTrack.AlbumTitle} - {SelectedTrack.TrackName} added to playlist {{playlist name}}.";
-        PlaylistDialog.Close();
+            if (!string.IsNullOrEmpty(PlaylistName))
+            {
+                var newPlaylist = new Models.Playlist()
+                    {
+                        PlaylistId = 0,
+                        Name = PlaylistName
+                    };
+
+                createdPlaylist = await PlaylistService.AddTrackToPlaylist(newPlaylist, SelectedTrack.TrackId, CurrentUserId, false);
+            }
+            else
+            {
+                createdPlaylist = await PlaylistService.AddTrackToPlaylist(UserPlaylists.Where(w => w.PlaylistId == SelectedPlaylistId).Select(s => s.Playlist).First(), SelectedTrack.TrackId, CurrentUserId, false);
+            }
+
+            CloseInfoMessage();
+            InfoMessage = $"Track {Artist.Name} - {SelectedTrack.AlbumTitle} - {SelectedTrack.TrackName} added to playlist {createdPlaylist.Name}.";
+            PlaylistDialog.Close();
+        }
+        catch (ApplicationException ex)
+        {
+            ErrorMessage = ex.Message;
+        }
     }
 
     private void CloseInfoMessage()
+    {
+        InfoMessage = "";
+    }
+
+    private void CloseErrorMessage()
     {
         InfoMessage = "";
     }
